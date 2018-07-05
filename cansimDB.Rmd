@@ -1,0 +1,330 @@
+---
+title: "Daily Updated Tables from StatCan"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: scroll
+    theme: journal
+---
+
+<!-- Dashboard as draft accompaniament to canCensus.Rmd (though not census data necessarily)  -->
+<!-- Attempt to provide some sort of template to cansim tables -->
+<!-- This version looks at multiple pages with fixed sidebar of variables -->
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, warning = FALSE, message=FALSE)
+# should be environ now did not see so added manually
+ options(cancensus.api_key = "CensusMapper_5c16da37f89e276603dd820db030d03a")
+```
+
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(DT)
+library(ggplot2)
+library(plotly)
+
+library(cansim)
+
+
+```
+
+Selectable Variables for Chosen Table appear here{.sidebar}
+===========================================================
+
+---
+
+
+```{r select_inputs}
+
+## uses tidyeval so can react to any table selected
+
+
+
+output$controls <- renderUI({
+
+## obtain select options for each column
+get_selects <- function(col) {
+  col <- sym(col)
+  raw_data() %>% 
+  group_by(!!col) %>% 
+  count() %>% 
+  pull(!!col)
+  
+}
+
+
+selects <-map(raw_columns(),get_selects)
+      
+     
+  cbs <- lapply(1:length(selects), function(i) {
+    inputId= paste0("col_",i)
+    choices = selects[[i]]
+              checkboxGroupInput(inputId=inputId,label = "Select One or More", choices= choices, inline = TRUE )
+          })
+          # Create a tagList of sliders (this is important)
+          do.call(tagList, cbs)
+    })
+
+ uiOutput("controls")
+
+ 
+downloadLink("downloadData", "Download Full Table (.csv) when options appear")
+```
+
+```{r}
+
+## does not work with download button
+
+
+```
+
+
+```{r selected_table}
+
+
+
+
+chosen_table <- eventReactive(input$meta_data_table_rows_selected,{
+  
+    s = as.integer(input$meta_data_table_rows_selected)
+   
+    table_chosen <- meta_data[s,]$cansimId
+    
+ })
+
+
+raw_data <- reactive({
+
+    get_cansim(chosen_table()) %>%
+  normalize_cansim_values()
+})
+
+
+raw_columns <- reactive({
+  
+ column_list <- cansim:::get_cansim_column_list(chosen_table())
+cols <- column_list$`Dimension name`
+
+#3 get rid of Geography as we know(?) column name is GEO
+cols <- setdiff(cols,"Geography")
+# add back GEO
+
+cols <- c("GEO",cols)
+
+})
+```
+
+
+
+
+Home Page
+=====================================
+
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+```{r intro}
+
+includeMarkdown("statsCanIntro.md")
+
+```
+
+### Click Row for Output (More Points = Slower Response)
+
+
+
+
+```{r updated_tables}
+
+
+
+# Normally replace with Sys.Date()
+tables_id <- get_cansim_changed_tables("2018-06-29") %>% 
+  pull(productId)
+
+## [1] 16100044 33100036 10100136 10100139 10100142 39100003
+meta_data <- get_cansim_cube_metadata(tables_id) #73 x  14 on 2018-06-29 (24 on following day)
+#takes a while doc suggests alternative with more limited data
+
+## list tables in english will want this as selectable
+## see https://rstudio.github.io/DT/shiny.html for renderDT
+output$meta_data_table <- DT::renderDataTable({
+  meta_data %>%
+    mutate(Points = as.integer(nbDatapointsCube)) %>% 
+ select(Table=cansimId, Description=cubeTitleEn,`Data Points` = Points) %>% 
+    #unique() %>% # cannot do as screws up selection
+  DT::datatable(
+  class = 'compact stripe hover row-border order-column',
+  rownames = FALSE,
+  selection = 'single',
+  options = list(
+    # autoWidth = TRUE,
+  columnDefs = list(list(width = '100px', targets = list(0))),
+  paging = FALSE,
+  searching = FALSE,
+  info = FALSE
+  )
+  )
+  
+})
+
+DT::dataTableOutput("meta_data_table")
+
+```
+
+Tables and File Download
+=====================================
+
+
+### Sortable and Selectable Table
+
+```{r}
+
+
+
+output$table <- DT::renderDataTable({
+print(raw_columns())
+
+for (i in seq_along(raw_columns())) {
+assign(paste0("col_", i), sym(raw_columns()[i]))
+}
+
+print("here")
+print(length(raw_columns()))
+## as hack could do
+
+if (length(raw_columns()) == 1)  {
+raw_data() %>%
+filter(!!col_1 %in% input$col_1) %>%
+
+select(Date = REF_DATE, !!col_1, Value = VALUE) %>%
+DT::datatable(
+class = 'compact stripe hover row-border order-column',
+rownames = FALSE,
+extensions = 'Buttons',
+options = list(
+paging = TRUE,
+searching = TRUE,
+info = FALSE,
+dom = 'Bfrtip',
+    buttons = c( 'csv', 'excel')
+)
+)
+} else if (length(raw_columns()) == 2) {
+raw_data() %>%
+filter(!!col_1 %in% input$col_1) %>%
+filter(!!col_2 %in% input$col_2) %>%
+
+select(Date = REF_DATE, !!col_1, !!col_2, Value = VALUE) %>%
+DT::datatable(
+class = 'compact stripe hover row-border order-column',
+rownames = FALSE,
+extensions = 'Buttons',
+options = list(
+paging = TRUE,
+searching = TRUE,
+info = FALSE,
+dom = 'Bfrtip',
+    buttons = c('csv', 'excel')
+)
+)
+} else if (length(raw_columns()) == 3) {
+raw_data() %>%
+filter(!!col_1 %in% input$col_1) %>%
+filter(!!col_2 %in% input$col_2) %>%
+filter(!!col_3 %in% input$col_3) %>%
+select(Date = REF_DATE,
+!!col_1,
+!!col_2,
+!!col_3,
+Value = VALUE) %>%
+DT::datatable(
+class = 'compact stripe hover row-border order-column',
+rownames = FALSE,
+extensions = 'Buttons',
+options = list(
+ 
+paging = TRUE,
+searching = TRUE,
+info = FALSE,
+dom = 'Bfrtip',
+    buttons = c( 'csv', 'excel')
+)
+)
+}
+
+
+
+})
+
+
+DT::dataTableOutput("table")
+
+
+```
+
+
+
+### Download Full Table
+
+
+```{r downloads}
+
+ # Downloadable csv of selected dataset ----
+  output$downloadData <- downloadHandler(
+    print("enter download"),
+    filename = function() {
+      paste0(chosen_table(), ".csv")
+    },
+    content = function(file) {
+      write.csv(raw_data(), file, row.names = FALSE)
+    }
+  )
+
+# Button appears to be needed here
+     downloadButton("downloadData", "Download")
+
+```
+
+Download
+========
+
+
+```{r}
+
+## does not work with download button
+
+#downloadLink("downloadData", "Download Complete Table (.csv)")
+```
+
+
+
+Charts
+=======
+
+
+### Example Plot (hover for details)
+
+```{r plot}
+
+# output$plot <- renderPlotly({
+# plot_crops <- raw_data() %>%
+#   filter(`Harvest disposition`=="Average yield (kilograms per hectare)")
+# 
+# p <- ggplot(plot_crops, aes(x = Date, y = VALUE, group= `Type of crop`, colour = `Type of crop`)) +
+#  geom_line() +
+#   facet_wrap("GEO",nrow=1, scales="fixed")
+# 
+# ggplotly(p)
+#   
+# })
+
+ plotlyOutput("plot")
+```
+
+<!-- Maybe have tabs for tables and plots -->
